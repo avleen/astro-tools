@@ -15,16 +15,39 @@ Usage:
   flextest.py FILE...                       # one sequence
   flextest.py --off F1 [F2...] --on F3 F4   # compare compensator off vs on
 """
-import argparse, hashlib, os, re, struct, sys
+import argparse, glob, hashlib, html, json, os, re, struct, sys
 from datetime import datetime
 import numpy as np
 np.seterr(all="ignore")
 from scipy import ndimage
 from scipy.spatial import cKDTree
 
-CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
+CACHE = os.environ.get("FLEXTEST_CACHE") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
 SAT = 50000          # ADU; skip stars peaking above this (non-linear / clipped)
 R = 12               # cutout half-size, px
+
+
+# ---------------------------------------------------------------- console / args
+def fix_console():
+    """Don't die on characters the console or a redirect can't encode (cp1252 on Windows)."""
+    for s in (sys.stdout, sys.stderr):
+        try:
+            s.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
+def expand(args):
+    """Expand wildcards ourselves: cmd.exe and PowerShell pass them through literally."""
+    out = []
+    for a in args:
+        if os.path.exists(a) or not any(c in a for c in "*?["):
+            out.append(a); continue
+        m = sorted(glob.glob(a, recursive=True))
+        if not m:
+            sys.exit(f"error: no files match {a}")
+        out += m
+    return out
 
 
 # ---------------------------------------------------------------- XISF reading
@@ -61,7 +84,7 @@ def read_xisf(path):
     img = np.frombuffer(data, dt).reshape(h, w).astype(np.float32)
     if fmt == "Float32":
         img *= 65535
-    hdr = {k: v.strip("'").strip() for k, v in
+    hdr = {k: html.unescape(v).strip("'").strip() for k, v in
            re.findall(r'<FITSKeyword name="([^"]+)" value="([^"]*)"', xml)}
     return img, hdr
 
@@ -108,13 +131,26 @@ def adaptive_moments(cut, x0, y0):
     return cx, cy, W
 
 
+_cache_warned = False
+
+
+def cache_key(path):
+    """From the file header (which holds the data checksum) and size, not the path or
+    mtime, so the same file hits the same entry from Windows, WSL or a copy."""
+    with open(path, "rb") as f:
+        head = f.read(65536)
+    return hashlib.sha1(head + f"|{os.path.getsize(path)}|v3".encode()).hexdigest()[:16]
+
+
 def measure(path):
-    st = os.stat(path)
-    key = hashlib.sha1(f"{os.path.abspath(path)}|{st.st_size}|{st.st_mtime}|v2".encode()).hexdigest()[:16]
-    cpath = os.path.join(CACHE, key + ".npz")
+    global _cache_warned
+    cpath = os.path.join(CACHE, cache_key(path) + ".npz")
     if os.path.exists(cpath):
-        z = np.load(cpath, allow_pickle=True)
-        return z["stars"], z["hdr"].item(), tuple(z["shape"])
+        try:
+            with np.load(cpath) as z:
+                return z["stars"], json.loads(str(z["hdr"])), tuple(int(v) for v in z["shape"])
+        except Exception:
+            pass                       # corrupt / old format: re-measure
 
     img, hdr = read_xisf(path)
     h, w = img.shape
@@ -150,8 +186,17 @@ def measure(path):
         stars.append((x - R + cx, y - R + cy, C[0, 0], C[1, 1], C[0, 1], flux, snr))
     stars = np.array(stars) if stars else np.zeros((0, 7))
 
-    os.makedirs(CACHE, exist_ok=True)
-    np.savez(cpath, stars=stars, hdr=np.array(hdr, dtype=object), shape=np.array([h, w]))
+    try:
+        os.makedirs(CACHE, exist_ok=True)
+        tmp = f"{cpath}.{os.getpid()}.tmp"
+        with open(tmp, "wb") as fh:
+            np.savez(fh, stars=stars, hdr=np.array(json.dumps(hdr)), shape=np.array([h, w]))
+        os.replace(tmp, cpath)
+    except OSError as e:
+        if not _cache_warned:
+            print(f"warning: can't write cache in {CACHE} ({e}); set FLEXTEST_CACHE to a writable dir",
+                  file=sys.stderr)
+            _cache_warned = True
     return stars, hdr, (h, w)
 
 
@@ -228,7 +273,9 @@ def register(a, b, shape, max_shift=400):
 # ---------------------------------------------------------------- reporting
 def t_of(hdr, key="DATE-OBS"):
     v = hdr.get(key) or hdr.get("DATE-OBS")
-    return datetime.fromisoformat(v[:26])
+    if not v:
+        raise ValueError("no DATE-OBS in header")
+    return datetime.fromisoformat(v[:26].rstrip("Z"))
 
 
 def warn(fr, prev):
@@ -255,13 +302,14 @@ def scale_of(hdr):
 
 
 def main():
+    fix_console()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("files", nargs="*")
     ap.add_argument("--off", nargs="+", default=[], help="subs with compensator OFF")
     ap.add_argument("--on", nargs="+", default=[], help="subs with compensator ON")
     ap.add_argument("--map", action="store_true", help="print 3x3 field map of trailing per frame")
     args = ap.parse_args()
-    entries = [(f, "-") for f in args.files] + [(f, "off") for f in args.off] + [(f, "on") for f in args.on]
+    entries = [(f, g) for fs, g in [(args.files, "-"), (args.off, "off"), (args.on, "on")] for f in expand(fs)]
     if not entries:
         ap.error("no files")
 

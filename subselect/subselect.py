@@ -48,7 +48,9 @@ from scipy import ndimage
 np.seterr(all="ignore")
 
 VERSION = "1"
-CACHE = os.path.join(os.path.expanduser("~"), ".cache", "subselect")
+CACHE = os.environ.get("SUBSELECT_CACHE") or (
+    os.path.join(os.environ["LOCALAPPDATA"], "subselect") if os.name == "nt" and os.environ.get("LOCALAPPDATA")
+    else os.path.join(os.path.expanduser("~"), ".cache", "subselect"))
 SAT = 50000          # ADU: skip stars peaking above this (non-linear / clipped)
 R = 12               # star cutout half-size, px
 EXTS = (".xisf", ".fits", ".fit", ".fts")
@@ -234,10 +236,10 @@ def shape_stats(s):
 def measure(path):
     """Per-sub metrics in pixels/ADU, cached by path+size+mtime."""
     st = os.stat(path)
-    key = hashlib.sha1(f"{os.path.abspath(path)}|{st.st_size}|{st.st_mtime}|{VERSION}".encode()).hexdigest()[:20]
+    key = hashlib.sha1(f"{os.path.normcase(os.path.abspath(path))}|{st.st_size}|{st.st_mtime}|{VERSION}".encode()).hexdigest()[:20]
     cpath = os.path.join(CACHE, key + ".json")
     try:
-        with open(cpath) as f:
+        with open(cpath, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
         pass
@@ -251,8 +253,10 @@ def measure(path):
              gradient=float(g.max() - g.min()), hdr=hdr)
     m = {k: (None if isinstance(v, float) and not np.isfinite(v) else v) for k, v in m.items()}
     os.makedirs(CACHE, exist_ok=True)
-    with open(cpath, "w") as f:
+    tmp = f"{cpath}.{os.getpid()}.tmp"            # atomic: parallel runs never see half a file
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(m, f)
+    os.replace(tmp, cpath)
     return m
 
 
@@ -294,7 +298,7 @@ def temp_of(hdr, path=""):
             return float(hdr[k])
         except (KeyError, ValueError):
             pass
-    m = re.search(r"(?<![\d.])(-?\d+(?:\.\d+)?) ?C\b", os.path.dirname(path))  # e.g. "Darks - -10C, Gain 100"
+    m = re.search(r"(?<![\d.])(-?\d+(?:\.\d+)?) ?C\b", path.replace("\\", "/").rpartition("/")[0])  # e.g. "Darks - -10C, Gain 100"
     return float(m.group(1)) if m else None
 
 
@@ -302,7 +306,7 @@ def load_darks(ddirs):
     """Master darks: list of (exposure s, sensor temp C or None, median ADU)."""
     out = []
     for ddir in ddirs:
-        for p in sorted(glob.glob(os.path.join(ddir, "**", "*"), recursive=True)):
+        for p in sorted(glob.glob(os.path.join(glob.escape(ddir), "**", "*"), recursive=True)):
             if not p.lower().endswith(EXTS):
                 continue
             try:
@@ -361,19 +365,54 @@ def median_by(subs, keyf, val):
 
 
 # ---------------------------------------------------------------- main
+def fix_argv(argv):
+    """cmd.exe/PowerShell: "D:\\dir\\" makes \\" a literal quote that swallows the following args."""
+    if os.name != "nt":
+        return argv
+    out = []
+    for x in argv:
+        head, q, rest = x.partition('"')
+        out += [head] + rest.split() if q else [x]
+    return [x for x in out if x]
+
+
+def expand(paths):
+    """Expand wildcards ourselves: cmd.exe and PowerShell pass them through unexpanded."""
+    out = []
+    for p in paths:
+        if not glob.has_magic(p) or os.path.exists(p):
+            out.append(p)
+            continue
+        hits = sorted(glob.glob(p, recursive=True))
+        if not hits:
+            print(f"  no match for {p}", file=sys.stderr)
+        out += hits
+    return out
+
+
 def find_files(paths, exclude):
+    norm = lambda p: os.path.normcase(os.path.abspath(p))
+    exclude = {norm(p) for p in exclude}
     out = []
     for p in paths:
         if os.path.isfile(p):
             out.append(os.path.abspath(p))
             continue
+        if not os.path.isdir(p):
+            print(f"  not found: {p}", file=sys.stderr)
+            continue
         for root, dirs, files in os.walk(p):
-            dirs[:] = [d for d in dirs if os.path.abspath(os.path.join(root, d)) not in exclude]
+            dirs[:] = [d for d in dirs if norm(os.path.join(root, d)) not in exclude]
             out += [os.path.abspath(os.path.join(root, f)) for f in files if f.lower().endswith(EXTS)]
-    return sorted(set(out))
+    return sorted(set(out), key=lambda p: (os.path.normcase(p), p))
 
 
-def main():
+def main(argv=None):
+    for st in (sys.stdout, sys.stderr):           # cp1252 console / redirected file: never die on a character
+        try:
+            st.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("paths", nargs="+", help="light files or folders (searched recursively)")
     ap.add_argument("--out", help="destination root (default: <first folder>/_selected); "
@@ -404,11 +443,17 @@ def main():
     g.add_argument("--grad-good", type=float, default=2.0,
                    help="gradient vs median for that filter+exposure+night (default %(default)s)")
     g.add_argument("--grad-max", type=float, default=3.0, help="(default %(default)s)")
-    a = ap.parse_args()
+    a = ap.parse_args(fix_argv(sys.argv[1:] if argv is None else list(argv)))
+    a.paths, a.darks = expand(a.paths), expand(a.darks)
+    if not a.paths:
+        sys.exit("no input files or folders")
+    if os.name == "nt":
+        a.jobs = min(a.jobs, 61)                  # ProcessPoolExecutor limit on Windows
+    a.jobs = max(1, a.jobs)
 
     first_dir = next((p for p in a.paths if os.path.isdir(p)), os.path.dirname(os.path.abspath(a.paths[0])))
-    out_root = os.path.abspath(a.out or os.path.join(first_dir, "_selected"))
-    out_border = out_root.rstrip("/\\") + "_borderline"
+    out_root = os.path.abspath(a.out or os.path.join(first_dir, "_selected"))   # abspath drops a trailing slash
+    out_border = out_root + "_borderline"
 
     files, flats = [], []
     for p in find_files(a.paths, {out_root, out_border}):
@@ -428,8 +473,8 @@ def main():
     print(f"measuring {len(files)} light subs with {a.jobs} worker(s) (cached results are instant)...", file=sys.stderr)
 
     subs = []
-    with ProcessPoolExecutor(max_workers=a.jobs) as ex:
-        for i, (p, m, err) in enumerate(ex.map(_measure_safe, files), 1):
+    with ProcessPoolExecutor(max_workers=min(a.jobs, len(files))) as ex:
+        for i, (p, m, err) in enumerate(ex.map(_measure_safe, files, chunksize=1), 1):
             print(f"\r  {i}/{len(files)}", end="", file=sys.stderr, flush=True)
             if err:
                 print(f"\n  FAILED {p}: {err}", file=sys.stderr)
@@ -500,7 +545,7 @@ def main():
     if a.csv:
         cols = ["night", "time", "filter", "exp", "file", "n", "fwhm_as", "minor_as", "ecc", "trail_as", "pa",
                 "bg", "bg_ratio", "gradient", "grad_ratio", "star_ratio", "sky_e", "eff", "tier", "why", "path"]
-        with open(a.csv, "w", newline="") as f:
+        with open(a.csv, "w", newline="", encoding="utf-8-sig") as f:      # -sig: Excel reads it as UTF-8
             w = csv.writer(f)
             w.writerow(cols)
             for s in subs:
@@ -521,8 +566,10 @@ def main():
              if (f["night"], f["filter"]) in used or (f["kind"] == "DARKFLAT" and f["night"] in flat_nights)]
     n = 0
     for src, dst in plan:
-        if os.path.exists(dst) and os.path.getsize(dst) == os.path.getsize(src):
-            continue
+        if os.path.isfile(dst):
+            ss, ds = os.stat(src), os.stat(dst)
+            if ss.st_size == ds.st_size and abs(ss.st_mtime - ds.st_mtime) < 2:   # 2 s: FAT/exFAT mtime resolution
+                continue
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.copy2(src, dst)
         n += 1

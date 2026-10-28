@@ -6,9 +6,19 @@ folder tree that PixInsight WBPP can pair with same-night flats.
 
 ## Install
 
+Linux / macOS / WSL:
+
 ```
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt      # Windows: .venv\Scripts\pip ...
+.venv/bin/pip install -r requirements.txt
+```
+
+Windows (cmd.exe or PowerShell, Python from python.org):
+
+```
+py -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
 ## Use
@@ -19,11 +29,37 @@ python subselect.py "D:/Astro/Heart Nebula" --copy          # copy to "D:/Astro/
 python subselect.py lights/ --darks masters/ --csv out.csv  # add sky e- / read-noise efficiency, CSV
 ```
 
+On Windows:
+
+```
+python subselect.py "D:\Astro\Heart Nebula"
+python subselect.py "D:\Astro\Heart Nebula" --copy --out "E:\Stacking\Heart"
+python subselect.py "D:\Astro\Heart Nebula\NIGHT_*\LIGHT" --out "D:\Astro\Heart Nebula\_selected"
+python subselect.py D:\Astro\Heart\*.xisf --csv report.csv
+```
+
+- Put paths that contain spaces in double quotes. Forward slashes work too.
+- cmd.exe and PowerShell do not expand wildcards, so `subselect.py` expands
+  `*`, `?` and `[...]` itself (and `**` for any depth). Quote the pattern when
+  it has spaces. With a wildcard, give `--out`: by default the output goes into
+  the first matched folder.
+- `"D:\Astro\"` with a trailing backslash makes Windows pass a stray `"`
+  (and can glue the next options onto the path). The script repairs this, but
+  it is cleaner to leave the trailing backslash off.
+- `-j` is capped at 61 on Windows (a Python limit). Each worker needs about
+  1 GB of RAM for a 26 MP frame.
+- Output is plain text. Characters the console cannot show (for example a
+  non-ASCII filter name on a cp1252 console) are printed as `?`. The CSV is
+  UTF-8 with a BOM so Excel opens it correctly.
+
 Folders are searched recursively. Only frames with `IMAGETYP` = Light are used,
 so flats and darks in the same tree are ignored. The output folder is skipped
 when scanning, so re-running is safe. Measurements are cached in
-`~/.cache/subselect`, so a re-run with different limits finishes almost
-instantly.
+`~/.cache/subselect` (Windows: `%LOCALAPPDATA%\subselect`; set
+`SUBSELECT_CACHE` to use another folder), so a re-run with different limits
+finishes almost instantly. Copies keep the original timestamps, and a file that
+already exists at the destination with the same size and time is not copied
+again.
 
 ## What it measures
 
@@ -73,3 +109,13 @@ In PixInsight WBPP:
 2. Grouping Keywords: add `NIGHT`, tick **Pre-processing**, untick
    **Post-processing**. Each night's lights then get that night's flats, and
    all nights still stack into one master per filter.
+
+## Tests
+
+```
+pip install pytest
+python -m pytest subselect -q        # from the repository root
+```
+
+The tests build small synthetic XISF and FITS subs in a temporary folder and
+run on Linux and Windows.
