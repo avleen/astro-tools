@@ -1,0 +1,4 @@
+numpy
+scipy
+lz4
+zstandard
