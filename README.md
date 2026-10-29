@@ -1,4 +1,13 @@
-# astro-tools
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo/logo-mark-dark.svg">
+    <img src="docs/logo/logo-mark-light.svg" width="180" alt="astro-tools logo">
+  </picture>
+</p>
+
+<h1 align="center">astro-tools</h1>
+
+<p align="center"><b>Grade subs · build master flats · chase down flexure</b></p>
 
 Python tools for checking and sorting deep-sky subs from a remote imaging rig.
 They read N.I.N.A. XISF directly, including lz4/zstd compressed files, and
@@ -73,6 +82,11 @@ night's lights are then calibrated with that night's flats. See
 - Expect about 1 GB of RAM per worker for a 26 MP frame (`-j` sets the number of workers).
 - Tested with an ASI2600MM Pro and N.I.N.A. 3.x files, on Windows and Linux.
 - Tests: `pip install pytest`, then `python -m pytest` from the repo root.
+
+## Logo
+
+In [docs/logo](docs/logo): SVGs to scale to any size, PNGs from 16 to 1024 px,
+and a favicon.
 
 ## License
 

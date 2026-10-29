@@ -1,3 +1,5 @@
+<a href="../README.md"><img src="../docs/logo/logo.svg" width="64" align="right" alt="astro-tools"></a>
+
 # subselect
 
 Grades astrophotography light subs (XISF from N.I.N.A., or uncompressed FITS) on

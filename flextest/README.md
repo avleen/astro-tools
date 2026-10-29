@@ -1,3 +1,5 @@
+<a href="../README.md"><img src="../docs/logo/logo.svg" width="64" align="right" alt="astro-tools"></a>
+
 # flextest
 
 These scripts diagnose tracking and flexure problems. They don't pick subs;

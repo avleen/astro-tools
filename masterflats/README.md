@@ -1,3 +1,5 @@
+<a href="../README.md"><img src="../docs/logo/logo.svg" width="64" align="right" alt="astro-tools"></a>
+
 # masterflats
 
 Turns each night's raw flats into one master flat per filter, written next to

@@ -1,3 +1,5 @@
+<a href="../README.md"><img src="../docs/logo/logo.svg" width="64" align="right" alt="astro-tools"></a>
+
 # pi-swap-recover
 
 Gets your images back from PixInsight's swap files after a crash.
