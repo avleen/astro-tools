@@ -17,7 +17,8 @@ Each sub is graded good / borderline / reject against the limits below. With
 --copy, the keepers and the flats from the same night go to:
 
   OUT/NIGHT_<date>/LIGHT/...              good subs, all filters together
-  OUT/NIGHT_<date>/FLAT/...               that night's flats, for the filters used
+  OUT/NIGHT_<date>/FLAT/...               that night's flats, for the filters used (only the
+                                          master flat, if there is one: see masterflats.py)
   OUT/NIGHT_<date>/DARKFLAT/...           that night's flat-darks, if any
   OUT_borderline/NIGHT_<date>/LIGHT/...   borderline subs
 
@@ -402,7 +403,8 @@ def find_files(paths, exclude):
             print(f"  not found: {p}", file=sys.stderr)
             continue
         for root, dirs, files in os.walk(p):
-            dirs[:] = [d for d in dirs if norm(os.path.join(root, d)) not in exclude]
+            dirs[:] = [d for d in dirs if norm(os.path.join(root, d)) not in exclude
+                       and not d.startswith("_selected")]      # other targets' output trees
             out += [os.path.abspath(os.path.join(root, f)) for f in files if f.lower().endswith(EXTS)]
     return sorted(set(out), key=lambda p: (os.path.normcase(p), p))
 
@@ -455,7 +457,7 @@ def main(argv=None):
     out_root = os.path.abspath(a.out or os.path.join(first_dir, "_selected"))   # abspath drops a trailing slash
     out_border = out_root + "_borderline"
 
-    files, flats = [], []
+    files, flats, masters = [], [], defaultdict(list)
     for p in find_files(a.paths, {out_root, out_border}):
         try:
             h = read_header(p)
@@ -463,7 +465,10 @@ def main(argv=None):
             print(f"  skipping {p}: {e}", file=sys.stderr)
             continue
         t = h.get("IMAGETYP", "LIGHT").upper()
-        if "FLAT" in t:
+        if "MASTER" in t:
+            if "FLAT" in t and "DARK" not in t:
+                masters[(night_of(p, h), h.get("FILTER", "") or "NOFILTER")].append(p)
+        elif "FLAT" in t:
             flats.append(dict(path=p, file=os.path.basename(p), filter=h.get("FILTER", "") or "NOFILTER",
                               night=night_of(p, h), kind="DARKFLAT" if "DARK" in t else "FLAT"))
         elif "LIGHT" in t:
@@ -558,12 +563,16 @@ def main(argv=None):
     tiers = ("good",) if a.good_only else ("good", "borderline")
     keep = [s for s in subs if s["tier"] in tiers]
     used = {(s["night"], s["filter"]) for s in keep}
-    flat_sets = {(f["night"], f["filter"]) for f in flats if f["kind"] == "FLAT"}
+    flat_sets = {(f["night"], f["filter"]) for f in flats if f["kind"] == "FLAT"} | set(masters)
     plan = [(s["path"], os.path.join(out_root if s["tier"] == "good" else out_border,
                                      f"NIGHT_{s['night']}", "LIGHT", s["file"])) for s in keep]
-    flat_nights = {n for n, _ in used}
+    # a master flat (masterflats.py) stands in for that night+filter's raw flats and flat-darks
+    plan += [(m, os.path.join(out_root, f"NIGHT_{k[0]}", "FLAT", os.path.basename(m)))
+             for k in sorted(used & set(masters)) for m in masters[k]]
+    raw_used = used - set(masters)
+    flat_nights = {n for n, _ in raw_used}
     plan += [(f["path"], os.path.join(out_root, f"NIGHT_{f['night']}", f["kind"], f["file"])) for f in flats
-             if (f["night"], f["filter"]) in used or (f["kind"] == "DARKFLAT" and f["night"] in flat_nights)]
+             if (f["night"], f["filter"]) in raw_used or (f["kind"] == "DARKFLAT" and f["night"] in flat_nights)]
     n = 0
     for src, dst in plan:
         if os.path.isfile(dst):
@@ -575,6 +584,18 @@ def main(argv=None):
         n += 1
     print(f"\ncopied {n} new file(s) ({len(plan)} planned) into {out_root}"
           + ("" if a.good_only else f" and {out_border}") + " - originals untouched")
+    stale = defaultdict(int)                          # raw flats an earlier run copied, now beside a master
+    for night, flt in used & set(masters):
+        d = os.path.join(out_root, f"NIGHT_{night}", "FLAT")
+        for p in glob.glob(os.path.join(glob.escape(d), "*")):
+            h = read_header(p) if p.lower().endswith(EXTS) else {}
+            if h and "MASTER" not in h.get("IMAGETYP", "").upper() and h.get("FILTER", "") == flt:
+                stale[(night, flt)] += 1
+    if stale:
+        print("\nNOTE: these FLAT folders hold raw flats from an earlier run as well as the master flat. "
+              "Delete the raw ones so WBPP uses only the master:")
+        for (night, flt), c in sorted(stale.items()):
+            print(f"  NIGHT_{night}/FLAT  {flt}: {c} raw flats")
     missing = sorted(used - flat_sets)
     if missing:
         print("\nWARNING: no flats found for these nights/filters (WBPP will need flats from another night):")

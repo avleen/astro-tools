@@ -98,6 +98,13 @@ _selected/NIGHT_2026-10-27/DARKFLAT/    that night's flat-darks, if any
 _selected_borderline/NIGHT_2026-10-23/LIGHT/
 ```
 
+If a night and filter has a master flat in the source tree (IMAGETYP
+`Master Flat`, e.g. built by [masterflats](../masterflats)), only the master is
+copied into `FLAT/`, and no raw flats or flat-darks for it. If an earlier run
+already copied raw flats there, the script says so; delete them so WBPP uses
+only the master. Any folder whose name starts with `_selected` is never
+scanned, so other targets' output trees don't get picked up.
+
 Night is the evening date. It is taken from a `NIGHT_YYYY-MM-DD` folder in the
 source path, or from local time minus 12 h, so dawn flats belong to the night
 before. At the end, the script lists any night and filter that has lights but no

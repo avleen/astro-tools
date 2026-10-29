@@ -213,7 +213,7 @@ def test_find_files_excludes_output(tree):
     found = ss.find_files([str(tree)], {excl + os.sep})
     assert len(found) == 9 and not any("_selected" in p for p in found)
     assert all(os.path.isabs(p) for p in found)
-    assert len(ss.find_files([str(tree)], set())) == 10
+    assert len(ss.find_files([str(tree)], set())) == 9                # any _selected* tree is skipped
 
 
 # ---------------------------------------------------------------- end to end
@@ -279,3 +279,26 @@ def test_cli_redirected_encoding(tmp_path, cache, enc, flt):
     out = (tmp_path / "out.txt").read_bytes().decode(enc)
     assert r.returncode == 0, (tmp_path / "err.txt").read_bytes().decode(enc, "replace")
     assert out.count(f" {flt} ") >= 3 and "report only" in out
+
+
+def test_main_copy_prefers_master_flat(tree, tmp_path, capsys):
+    """A master flat (e.g. from masterflats.py) replaces that night+filter's raw flats and flat-darks."""
+    mk = kw(IMAGETYP="'Master Flat'", EXPTIME="10.0", DATE_LOC="'2026-10-23T06:35:48.000'")
+    write_xisf(tree / NIGHT / "FLAT" / "MasterFlat_2026-10-22_H_10s.xisf", np.full((16, 16), 20000, np.uint16), mk)
+    out = tmp_path / "out"
+    ss.main([str(tree), "--copy", "--out", str(out), "-j", "2"])
+    o = capsys.readouterr().out
+    assert os.listdir(out / NIGHT / "FLAT") == ["MasterFlat_2026-10-22_H_10s.xisf"]
+    assert not (out / NIGHT / "DARKFLAT").exists() and "WARNING: no flats" not in o
+    assert "NOTE" not in o
+
+
+def test_main_copy_notes_stale_raw_flats(tree, tmp_path, capsys):
+    out = tmp_path / "out"
+    ss.main([str(tree), "--copy", "--out", str(out), "-j", "2"])            # raw flats copied, as before
+    mk = kw(IMAGETYP="'Master Flat'", EXPTIME="10.0", DATE_LOC="'2026-10-23T06:35:48.000'")
+    write_xisf(tree / NIGHT / "FLAT" / "MasterFlat_2026-10-22_H_10s.xisf", np.full((16, 16), 20000, np.uint16), mk)
+    capsys.readouterr()
+    ss.main([str(tree), "--copy", "--out", str(out), "-j", "2"])
+    o = capsys.readouterr().out
+    assert "H: 2 raw flats" in o

@@ -8,6 +8,7 @@ uncompressed FITS. No PixInsight is needed to run them.
 |---|---|
 | [subselect](subselect) | Grades every light sub (FWHM, eccentricity, trailing, star count, background, gradient, optional sky e⁻ and read-noise efficiency). Copies the good and borderline ones, plus the same night's flats, into a layout that drops straight into PixInsight WBPP. |
 | [flextest](flextest) | Diagnoses flexure and tracking: in-sub trails, drift and field rotation between subs, compensator on/off comparisons, sky background vs read noise. |
+| [masterflats](masterflats) | Turns each night's raw flats into one master flat per filter, next to the raw flats. Subtracts flat-darks, a master bias or a master dark. Idempotent, so it can run every day; can delete the raw flats afterwards. |
 | [pi-swap-recover](pi-swap-recover) | Recovers images from PixInsight's swap files after a crash, converting every undo-history state to XISF, with optional previews. |
 
 ## Install
@@ -46,6 +47,16 @@ python subselect/subselect.py "D:\Astro\Heart Nebula" --darks "D:\Astro\Darks -1
 
 # happy with the grades: build _selected/ and _selected_borderline/
 python subselect/subselect.py "D:\Astro\Heart Nebula" --copy
+```
+
+Each tool does one job, and they work together. A daily routine:
+
+```
+# 1. new flats -> master flats (already-built masters are skipped)
+python masterflats/masterflats.py "D:\Astro\Downloads" --darks "D:\Astro\Darks -10C\master"
+
+# 2. grade and copy; subselect copies the masters instead of the raw flats
+python subselect/subselect.py "D:\Astro\Downloads\Heart Nebula" --copy
 ```
 
 Quote paths that contain spaces. Wildcards such as `*.xisf` work in cmd and
