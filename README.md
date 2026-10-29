@@ -8,7 +8,7 @@ uncompressed FITS. No PixInsight is needed to run them.
 |---|---|
 | [subselect](subselect) | Grades every light sub (FWHM, eccentricity, trailing, star count, background, gradient, optional sky e⁻ and read-noise efficiency). Copies the good and borderline ones, plus the same night's flats, into a layout that drops straight into PixInsight WBPP. |
 | [flextest](flextest) | Diagnoses flexure and tracking: in-sub trails, drift and field rotation between subs, compensator on/off comparisons, sky background vs read noise. |
-| [masterflats](masterflats) | Turns each night's raw flats into one master flat per filter, next to the raw flats. Subtracts flat-darks, a master bias or a master dark. Idempotent, so it can run every day; can delete the raw flats afterwards. |
+| [masterflats](masterflats) | Turns each night's raw flats into one master flat per filter, next to the raw flats. Subtracts flat-darks, a master bias or a master dark. Writes zstd-compressed XISF that WBPP uses as-is. Idempotent, so it can run every day; can delete the raw flats afterwards. |
 | [pi-swap-recover](pi-swap-recover) | Recovers images from PixInsight's swap files after a crash, converting every undo-history state to XISF, with optional previews. |
 
 ## Install

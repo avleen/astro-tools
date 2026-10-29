@@ -75,6 +75,11 @@ Options:
    as-is. It is written to a temp file and then renamed, so an interrupted run
    never leaves half a master.
 
+Checked against WBPP 3.1.2 on the same 25 flats and 10 s master dark (ESD
+rejection, multiplicative normalisation): the large-scale shape agrees to
+0.001%, single pixels to 0.06% RMS (worst pixel 1%), from the slightly
+different outlier rejection.
+
 ## Idempotency
 
 Each master records the names and sizes of the flats and flat-darks that went
