@@ -9,9 +9,10 @@
 
 <p align="center"><b>Grade subs · build master flats · chase down flexure</b></p>
 
-Python tools for checking and sorting deep-sky subs from a remote imaging rig.
-They read N.I.N.A. XISF directly, including lz4/zstd compressed files, and
-uncompressed FITS. No PixInsight is needed to run them.
+A collection of small command-line tools for handling XISF and FITS files in
+an astrophotography workflow: grading subs, building master flats, measuring
+flexure and recovering lost work. Each one does a single job, and they're
+built to be chained together.
 
 | tool | what it does |
 |---|---|
@@ -58,15 +59,8 @@ python subselect/subselect.py "D:\Astro\Heart Nebula" --darks "D:\Astro\Darks -1
 python subselect/subselect.py "D:\Astro\Heart Nebula" --copy
 ```
 
-Each tool does one job, and they work together. A daily routine:
-
-```
-# 1. new flats -> master flats (already-built masters are skipped)
-python masterflats/masterflats.py "D:\Astro\Downloads" --darks "D:\Astro\Darks -10C\master"
-
-# 2. grade and copy; subselect copies the masters instead of the raw flats
-python subselect/subselect.py "D:\Astro\Downloads\Heart Nebula" --copy
-```
+To run masterflats and subselect together each morning, see
+[Workflow example](#workflow-example).
 
 Quote paths that contain spaces. Wildcards such as `*.xisf` work in cmd and
 PowerShell too: the tools expand them themselves.
@@ -78,10 +72,74 @@ night's lights are then calibrated with that night's flats. See
 
 ## Notes
 
+- XISF can be uncompressed or lz4, zstd or zlib compressed, with or without byte shuffling. FITS must be uncompressed.
 - Measurements are cached, so re-running with different limits is instant.
 - Expect about 1 GB of RAM per worker for a 26 MP frame (`-j` sets the number of workers).
 - Tested with an ASI2600MM Pro and N.I.N.A. 3.x files, on Windows and Linux.
 - Tests: `pip install pytest`, then `python -m pytest` from the repo root.
+
+## Workflow example
+
+A night's data from the rig, as N.I.N.A. saves it:
+
+```
+D:\Astro\Downloads\Heart Nebula\
+    NIGHT_2026-10-27\
+        LIGHT\H\  LIGHT\O\  LIGHT\S\     300 s subs
+        FLAT\H\   FLAT\O\   FLAT\S\      25 flats per filter, taken at dawn
+```
+
+**1. Build the master flats.** Run with `-n` first to see what it will do, then
+again without it:
+
+```
+python masterflats/masterflats.py "D:\Astro\Downloads" --darks "D:\Astro\Darks -10C\master" -n
+python masterflats/masterflats.py "D:\Astro\Downloads" --darks "D:\Astro\Darks -10C\master"
+```
+
+Each `FLAT\<filter>\` folder now also holds `MasterFlat_2026-10-27_<filter>_<exp>s.xisf`.
+Earlier nights whose masters are up to date are skipped, so pointing it at
+the whole downloads folder every day is fine.
+
+**2. Grade the subs.** A report only; nothing is copied or moved:
+
+```
+python subselect/subselect.py "D:\Astro\Downloads\Heart Nebula" --darks "D:\Astro\Darks -10C\master"
+```
+
+Check the rejects. If the limits are too strict or too loose, change them
+(`--fwhm-good`, `--ecc-good` and so on) and run it again. Measurements are
+cached, so this is instant.
+
+**3. Copy the keepers:**
+
+```
+python subselect/subselect.py "D:\Astro\Downloads\Heart Nebula" --copy
+```
+
+```
+D:\Astro\Downloads\Heart Nebula\
+    _selected\
+        NIGHT_2026-10-27\
+            LIGHT\...                     good subs
+            FLAT\...                      the master flats, not the raw flats
+    _selected_borderline\
+        NIGHT_2026-10-27\LIGHT\...        borderline subs
+```
+
+**4. Stack.** In WBPP, add `_selected` (and `_selected_borderline` if you want
+them), add `NIGHT` as a Pre-processing-only grouping keyword, and add your
+master darks. Each night's lights are calibrated with that night's master
+flats, and all nights stack together.
+
+**5. Tidy up (optional).** Once you're happy with the masters, delete the raw
+flats:
+
+```
+python masterflats/masterflats.py "D:\Astro\Downloads" --darks "D:\Astro\Darks -10C\master" --delete-raw
+```
+
+The masters stay where they are and are still picked up by later runs of either tool.
 
 ## Logo
 

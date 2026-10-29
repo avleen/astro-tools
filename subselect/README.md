@@ -2,7 +2,7 @@
 
 # subselect
 
-Grades astrophotography light subs (XISF from N.I.N.A., or uncompressed FITS) on
+Grades astrophotography light subs (XISF or uncompressed FITS) on
 star size, shape, star count and background. It can then copy the keepers into a
 folder tree that PixInsight WBPP can pair with same-night flats.
 
