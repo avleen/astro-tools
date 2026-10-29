@@ -233,9 +233,51 @@ def test_old_uncompressed_master_compressed_not_rebuilt(rig, capsys):
         os.remove(path.parent / f)                      # raw flats partly gone: a rebuild would lose frames
 
     o = run(capsys, src, "--darks", darks, "-n")[1]
-    assert "would compress it" in o and "compression=" not in image_tag(path)
+    assert "would be compressed" in o and "compression=" not in image_tag(path)
     o = run(capsys, src, "--darks", darks)[1]
-    assert o.count("up to date:") == 2 and "compressed" in o and " built " not in o
+    assert o.count("up to date:") == 2 and "(compressed)" in o and " built " not in o
     img1, h = read_image(str(path))
     assert "compression=" in image_tag(path) and h["NCOMBINE"] == "5" and np.array_equal(img0, img1)
     assert "compressed" not in run(capsys, src, "--darks", darks)[1]     # and only once
+
+
+def header(path):
+    with open(path, "rb") as f:
+        return _xisf_xml(f)
+
+
+def test_metadata_holds_only_xisf_properties(rig, capsys):
+    src, darks = rig
+    run(capsys, src, "--darks", darks)
+    xml = header(master(src, "H"))
+    meta = re.search(r"<Metadata>(.*?)</Metadata>", xml, re.S).group(1)
+    assert set(re.findall(r'<Property id="([^":]*):', meta)) == {"XISF"}      # PixInsight rejects anything else
+    assert re.search(r'<Property id="XISF:CreationTime" type="TimePoint" value="\d{4}-\d\d-\d\dT[\d:]+Z"/>', meta)
+    assert f'<Property id="XISF:CreatorApplication" type="String">{mf.CREATOR}</Property>' in meta
+    assert "MasterFlats:Inputs" in re.search(r"<Image\b.*?</Image>", xml, re.S).group(0)
+
+
+def test_old_header_fixed_not_rebuilt(rig, capsys):
+    src, darks = rig
+    run(capsys, src, "--darks", darks)
+    path = master(src, "H")
+    img0, _ = read_image(str(path))
+    xml = header(path)                                  # rewrite it with an older version's header layout
+    inputs = re.search(mf.INPUTS_RE, xml, re.S).group(0)
+    old = re.sub(r"<Metadata>.*?</Metadata>", "<Metadata>\n" + inputs
+                 + '<Property id="XISF:CreatorApplication" type="String">masterflats</Property>\n</Metadata>',
+                 xml.replace(inputs, ""), flags=re.S)
+    with open(path, "rb") as f:
+        f.seek(int(re.search(r'attachment:(\d+):', xml).group(1)))
+        data = f.read()
+    tag = image_tag(path)
+    mf._write_xisf(path, lambda o: old.replace(tag, re.sub(r'attachment:\d+:', f'attachment:{o}:', tag)).encode(), data)
+    assert "XISF:CreationTime" not in header(path)
+
+    o = run(capsys, src, "--darks", darks)[1]
+    assert "(header fixed)" in o and " built " not in o
+    xml = header(path)
+    meta = re.search(r"<Metadata>(.*?)</Metadata>", xml, re.S).group(1)
+    assert "MasterFlats" not in meta and "XISF:CreationTime" in meta and xml.count("MasterFlats:Inputs") == 1
+    assert np.array_equal(read_image(str(path))[0], img0)
+    assert "header fixed" not in run(capsys, src, "--darks", darks)[1]  # and only once

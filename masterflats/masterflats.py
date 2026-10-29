@@ -18,8 +18,8 @@ IMAGETYP = 'Master Flat', which WBPP uses as-is, zstd-compressed with byte shuff
 (as PixInsight's own "zstd + byte shuffling" save option; about 60% of the raw size).
 
 Idempotent: the master records which flats and dark went into it. A master that is
-up to date is left alone (an uncompressed one from an older version is compressed in
-place, not rebuilt); new flats or a new flat-dark rebuild it. Once raw flats are
+up to date is left alone (one from an older version has its pixels compressed and its
+header fixed in place, not rebuilt); new flats or a new flat-dark rebuild it. Once raw flats are
 deleted (--delete-raw, or by hand) the master is kept. Safe to run every day.
 
 subselect.py --copy picks the masters up automatically and copies them instead of
@@ -162,11 +162,6 @@ def recorded_inputs(path):
     return json.loads(html.unescape(m.group(1))) if m else None
 
 
-def _image_tag(path):
-    with open(path, "rb") as f:
-        return re.search(r"<Image\b[^>]*>", _xisf_xml(f)).group(0)
-
-
 def signature(grp, dark_paths):
     """By name and size, not path or mtime, so copies and moved trees still match."""
     return dict(version=VERSION, flats=sorted(f"{f['file']}|{os.path.getsize(f['path'])}" for f in grp["files"]),
@@ -207,6 +202,8 @@ def integrate(paths, dark, jobs, kappa=3.0, stripe=256):
     return out * scales.mean()
 
 
+CREATOR = f"astro-tools masterflats {VERSION}"
+
 ZSTD_LEVEL = 9       # 59% of raw on a real master; level 19 gets 58% and takes 20x longer
 
 
@@ -230,22 +227,54 @@ def _write_xisf(path, xml, data):
     os.replace(tmp, path)
 
 
-def compress_in_place(path):
-    """Recompress an uncompressed master, header untouched. Returns (old, new) bytes, or None if already compressed."""
+def _metadata():
+    """File-level properties: only the XISF: namespace is allowed here, and these two are mandatory
+    (XISF 1.0 spec 11.4.1: a TimePoint, and the creating application's name and version)."""
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return ('<Metadata>\n'
+            f'<Property id="XISF:CreationTime" type="TimePoint" value="{now}"/>\n'
+            f'<Property id="XISF:CreatorApplication" type="String">{CREATOR}</Property>\n'
+            '</Metadata>\n')
+
+
+INPUTS_RE = r'<Property id="MasterFlats:Inputs" type="String">.*?</Property>\n?'
+
+
+def _stale(xml, tag):
+    """What an older masterflats left out of date in this header: [] if nothing."""
+    meta = re.search(r"<Metadata>.*?</Metadata>", xml, re.S)
+    meta = meta.group(0) if meta else ""
+    return ((["compressed"] if "compression=" not in tag else [])
+            + (["header fixed"] if "MasterFlats:" in meta or 'XISF:CreationTime" type="TimePoint"' not in meta
+               or f">{CREATOR}<" not in meta else []))
+
+
+def refresh_in_place(path, dry_run=False):
+    """Bring a master from an older masterflats up to date without rebuilding it: compress the pixels
+    if they aren't, and move our inputs out of the file-level <Metadata> (PixInsight only allows XISF:
+    properties there) and add XISF:CreationTime. Pixels are unchanged. Returns what was done, [] if nothing."""
     with open(path, "rb") as f:
         xml = _xisf_xml(f)
         tag = re.search(r"<Image\b[^>]*>", xml).group(0)
-        if "compression=" in tag:
-            return None
+        todo = _stale(xml, tag)
+        if dry_run or not todo:
+            return todo
         off, size = map(int, re.search(r'location="attachment:(\d+):(\d+)"', tag).groups())
         f.seek(off)
-        raw = f.read(size)
-    old = os.path.getsize(path)
-    data, comp = _compress(raw)
-    _write_xisf(path, lambda o: xml.replace(tag, re.sub(
-        r'location="attachment:\d+:\d+"', f'location="attachment:{o}:{len(data)}" compression="{comp}"', tag)
+        data = f.read(size)
+    comp = re.search(r'compression="([^"]*)"', tag)
+    if comp is None:
+        data, comp = _compress(data)
+    else:
+        comp = comp.group(1)
+    inputs = re.search(INPUTS_RE, xml, re.S).group(0).rstrip("\n") + "\n"
+    body = re.sub(r"<Metadata>.*?</Metadata>\n?", "", re.sub(INPUTS_RE, "", xml, flags=re.S), flags=re.S)
+    body = body.replace("</Image>", inputs + "</Image>", 1).replace("</xisf>", _metadata() + "</xisf>")
+    plain = re.sub(r' compression="[^"]*"', "", tag)
+    _write_xisf(path, lambda o: body.replace(tag, re.sub(
+        r'location="attachment:\d+:\d+"', f'location="attachment:{o}:{len(data)}" compression="{comp}"', plain)
     ).encode(), data)
-    return old, os.path.getsize(path)
+    return todo
 
 
 def write_master(path, img, hdr, grp, sig, dark_desc, kappa):
@@ -266,16 +295,15 @@ def write_master(path, img, hdr, grp, sig, dark_desc, kappa):
              + "".join(card(k, hdr[k]) for k in KEEP_KEYS if hdr.get(k, "") != "")
              + card("HISTORY", "", f"masterflats: {len(grp['files'])} flats minus {dark_desc}, "
                                    f"median-normalised, {kappa:g}-sigma clipped mean"))
-    props = (f'<Property id="MasterFlats:Inputs" type="String">{escape(json.dumps(sig))}</Property>\n'
-             '<Property id="XISF:CreatorApplication" type="String">masterflats</Property>\n')
+    inputs = f'<Property id="MasterFlats:Inputs" type="String">{escape(json.dumps(sig))}</Property>\n'
     xml = lambda off: ('<?xml version="1.0" encoding="UTF-8"?>\n'
                        '<xisf version="1.0" xmlns="http://www.pixinsight.com/xisf" '
                        'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
                        'xsi:schemaLocation="http://www.pixinsight.com/xisf http://pixinsight.com/xisf/xisf-1.0.xsd">\n'
                        f'<Image geometry="{w}:{h}:1" sampleFormat="Float32" bounds="0:1" imageType="MasterFlat" '
                        f'colorSpace="Gray" location="attachment:{off}:{len(data)}" compression="{comp}">\n'
-                       f'{cards}</Image>\n'
-                       f'<Metadata>\n{props}</Metadata>\n</xisf>\n').encode()
+                       f'{cards}{inputs}</Image>\n'
+                       f'{_metadata()}</xisf>\n').encode()
     _write_xisf(path, xml, data)
 
 
@@ -322,15 +350,12 @@ def main(argv=None):
             continue
         if up_to_date(prev, sig):
             note = ""
-            if a.dry_run:
-                note = " (would compress it)" if "compression=" not in _image_tag(grp["path"]) else ""
-            else:
-                try:
-                    sizes = compress_in_place(grp["path"])
-                    note = sizes and f" (compressed {sizes[0] / 1e6:.0f} -> {sizes[1] / 1e6:.0f} MB)"
-                except Exception as e:
-                    note = f" (compressing it FAILED: {type(e).__name__}: {e})"
-                    status["failed"] += 1
+            try:
+                done = refresh_in_place(grp["path"], a.dry_run)
+                note = done and f" ({'would be ' if a.dry_run else ''}{' and '.join(done)})"
+            except Exception as e:
+                note = f" (updating it FAILED: {type(e).__name__}: {e})"
+                status["failed"] += 1
             print(f"{label}  up to date: {name}{note or ''}")
             status["up to date"] += 1
         elif len(grp["files"]) < a.min_flats:
