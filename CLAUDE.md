@@ -11,6 +11,7 @@ own README and tests.
 | `flextest/` | `flextest.py`, `skybg.py` | flexure, tracking and sky-background diagnostics |
 | `pi-swap-recover/` | `pi_swap_recover.py` | recover images from PixInsight swap files |
 | `nina-sequences/` | `*.json` | N.I.N.A. Advanced Sequencer files (data, not code; no tests) |
+| `processing/` | `README.md` | PixInsight processing notes (docs only; no tests) |
 | `docs/logo/` | `make_logo.py` | generates every logo file in that folder |
 
 ## Design rules

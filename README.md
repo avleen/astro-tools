@@ -20,6 +20,7 @@ built to be chained together.
 | [flextest](flextest) | Diagnoses flexure and tracking: in-sub trails, drift and field rotation between subs, compensator on/off comparisons, sky background vs read noise. |
 | [masterflats](masterflats) | Turns each night's raw flats into one master flat per filter, next to the raw flats. Subtracts flat-darks, a master bias or a master dark. Writes zstd-compressed XISF that WBPP uses as-is. Idempotent, so it can run every day; can delete the raw flats afterwards. |
 | [nina-sequences](nina-sequences) | N.I.N.A. Advanced Sequencer files: an unattended nightly sequence built on Target Scheduler, ending with the flats that masterflats uses. |
+| [processing](processing) | PixInsight notes: from WBPP masters to a finished narrowband nebula with RGB stars, with settings for the steps that need care (MGC, NarrowbandNormalization, LHE, star reduction). |
 | [pi-swap-recover](pi-swap-recover) | Recovers images from PixInsight's swap files after a crash, converting every undo-history state to XISF, with optional previews. |
 
 ## Install
