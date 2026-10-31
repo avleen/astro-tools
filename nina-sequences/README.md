@@ -29,7 +29,7 @@ Global triggers: meridian flip; autofocus after a 2 °C temperature change.
 ```
 
 The flats in step 3 are what [masterflats](../masterflats) turns into master
-flats each morning. See the [workflow example](../README.md#workflow-example).
+flats each morning. See the [workflow](../README.md#workflow).
 
 ### Using it
 

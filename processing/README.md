@@ -38,7 +38,7 @@ STF auto-stretch to look at linear images; it only changes the display.
 ## 1. WBPP
 
 - Master darks at the lights' temperature (−10 °C), and a master flat per
-  night (see the [workflow example](../README.md#workflow-example)).
+  night (see the [workflow](../README.md#workflow)).
 - Add `NIGHT` as a grouping keyword, Pre-processing only, so each night's
   lights get that night's flats.
 - CosmeticCorrection on, PSF Signal Weight, one registration reference for
