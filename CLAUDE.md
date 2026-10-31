@@ -7,6 +7,7 @@ own README and tests.
 | folder | script | job |
 |---|---|---|
 | `subselect/` | `subselect.py` | grade light subs, copy keepers + that night's flats into `_selected/NIGHT_<date>/{LIGHT,FLAT}` |
+| `subdepth/` | `subdepth.py` | per-sub zero point (ASTAP + Gaia H18/H17), sky mag/arcsec², transparency, effective time |
 | `masterflats/` | `masterflats.py` | one master flat per night and filter, next to the raw flats; idempotent |
 | `flextest/` | `flextest.py`, `skybg.py` | flexure, tracking and sky-background diagnostics |
 | `pi-swap-recover/` | `pi_swap_recover.py` | recover images from PixInsight swap files |
@@ -22,6 +23,8 @@ own README and tests.
   optional (pi-swap-recover previews only). Don't add more without asking.
 - `masterflats` imports its file readers from `../subselect/subselect.py` via
   `sys.path`; keep shared readers there rather than copying them.
+- `subdepth` imports readers and the star finder from subselect the same way, and
+  calls ASTAP (`astap_cli`) as an external program.
 - Everything must work on native Windows as well as Linux/WSL: quote-safe
   paths, wildcard expansion done by the tools themselves (`expand`, `fix_argv`),
   no shell-only tricks.
@@ -49,6 +52,8 @@ Both must pass before committing. New behaviour gets a test in that tool's
 
 - Each tool's README, the root README and the script's `--help` docstring
   must agree. Update all three when options or behaviour change.
+- `subdepth/HOW-IT-WORKS.md` documents the method (formulas, thresholds,
+  measured constants). Update it when any of those change.
 - Write plainly: short sentences, concrete examples, real paths. No marketing
   language or filler.
 - Examples use Windows paths (`D:\Astro\...`), since that's where the rig's
