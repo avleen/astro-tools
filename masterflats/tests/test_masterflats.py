@@ -281,3 +281,126 @@ def test_old_header_fixed_not_rebuilt(rig, capsys):
     assert "MasterFlats" not in meta and "XISF:CreationTime" in meta and xml.count("MasterFlats:Inputs") == 1
     assert np.array_equal(read_image(str(path))[0], img0)
     assert "header fixed" not in run(capsys, src, "--darks", darks)[1]  # and only once
+
+
+# ---------------------------------------------------------------- sharing masters between targets
+def add_lights(d, flt, n=2, rot="225.41", **kw):
+    d.mkdir(parents=True, exist_ok=True)
+    for i in range(n):
+        write_xisf(d / f"light_{flt}_{rot}_{i}.xisf", np.full((N, N), 1000, np.uint16),
+                   dict(FK, IMAGETYP="'LIGHT'", FILTER=f"'{flt}'", EXPTIME="600.0", ROTATANG=rot, **kw))
+
+
+@pytest.fixture
+def mosaic(tmp_path):
+    """Panel 1 has flats and lights in H; Panel 2 has lights only, as when flats are shot once per filter and angle."""
+    p1, p2 = tmp_path / "P 1", tmp_path / "P 2"
+    add_flats(p1 / NIGHT / "FLAT" / "H", "H", 5)
+    add_lights(p1 / NIGHT / "LIGHT" / "H", "H")
+    add_lights(p2 / NIGHT / "LIGHT" / "H", "H")
+    darks = tmp_path / "Darks -10C"
+    darks.mkdir()
+    write_xisf(darks / "10s.xisf", np.full((N, N), OFFSET, np.uint16),
+               {"IMAGETYP": "'Master Dark'", "EXPTIME": "10.0", "SET-TEMP": "-10.0"})
+    return tmp_path, p1, p2, str(darks)
+
+
+def test_master_copied_to_target_with_lights_but_no_flats(mosaic, capsys):
+    top, p1, p2, darks = mosaic
+    rc, o = run(capsys, p1, p2, "--darks", darks)
+    assert rc == 0 and o.count(" built MasterFlat_") == 1 and "1 copied" in o and "P 1" in o
+    assert master(p2, "H").read_bytes() == master(p1, "H").read_bytes()
+    assert sorted(os.listdir(master(p2, "H").parent)) == [master(p2, "H").name]    # no temp file left
+    m0 = os.stat(master(p2, "H")).st_mtime_ns
+    rc, o = run(capsys, p1, p2, "--darks", darks)                     # second run: nothing to copy
+    assert "copied" not in o and os.stat(master(p2, "H")).st_mtime_ns == m0
+
+
+def test_copy_dry_run_changes_nothing(mosaic, capsys):
+    top, p1, p2, darks = mosaic
+    rc, o = run(capsys, top, "--darks", darks, "-n")
+    assert "would copy MasterFlat_" in o and "1 to copy" in o
+    assert not master(p1, "H").exists() and not master(p2, "H").parent.exists()
+
+
+def test_copy_needs_same_angle_filter_and_night(mosaic, capsys):
+    top, p1, p2, darks = mosaic
+    add_lights(p2 / NIGHT / "LIGHT" / "O", "O")                        # no O flats anywhere
+    add_lights(p2 / NIGHT / "LIGHT" / "H", "H", rot="287.0")           # H, but another angle
+    add_lights(p2 / "NIGHT_2026-10-23" / "LIGHT" / "H", "H")           # H, same angle, another night
+    rc, o = run(capsys, top, "--darks", darks)
+    assert o.count("copied MasterFlat_") == 1 and o.count("NO FLATS") == 3 and "3 without flats" in o
+    assert not (p2 / NIGHT / "FLAT" / "O").exists() and not (p2 / "NIGHT_2026-10-23" / "FLAT").exists()
+    assert os.listdir(master(p2, "H").parent) == [master(p2, "H").name]
+
+
+def test_small_rotator_difference_still_matches(mosaic, capsys):
+    top, p1, p2, darks = mosaic
+    add_lights(p2 / NIGHT / "LIGHT" / "H", "H", rot="225.9")
+    add_lights(p2 / NIGHT / "LIGHT" / "H", "H", rot="225.0")
+    rc, o = run(capsys, top, "--darks", darks)
+    assert o.count("copied MasterFlat_") == 1 and "NO FLATS" not in o
+
+
+def test_rotator_tolerance_is_two_degrees(mosaic, capsys):
+    top, p1, p2, darks = mosaic                                        # the master is at 225.41
+    add_lights(p2 / NIGHT / "LIGHT" / "H", "H", rot="227.3")           # 1.89 away: matches
+    rc, o = run(capsys, top, "--darks", darks)
+    assert o.count("copied MasterFlat_") == 1 and "NO FLATS" not in o
+
+
+def test_rotator_beyond_tolerance_is_left_without_flats(mosaic, capsys):
+    top, p1, p2, darks = mosaic
+    add_lights(p2 / NIGHT / "LIGHT" / "H", "H", rot="227.5")           # 2.09 away: doesn't
+    rc, o = run(capsys, top, "--darks", darks)
+    assert "H 227.5 deg, 2 lights  NO FLATS" in o and "1 without flats" in o
+
+
+def test_target_with_own_flats_gets_no_copy(mosaic, capsys):
+    top, p1, p2, darks = mosaic
+    add_flats(p2 / NIGHT / "FLAT" / "H", "H", 4)
+    rc, o = run(capsys, top, "--darks", darks)
+    assert o.count(" built MasterFlat_") == 2 and "copied" not in o and "NO FLATS" not in o
+    assert read_header(str(master(p2, "H")))["NCOMBINE"] == "4"
+
+
+def test_own_flats_arriving_later_replace_the_copy(mosaic, capsys):
+    top, p1, p2, darks = mosaic
+    run(capsys, top, "--darks", darks)
+    add_flats(p2 / NIGHT / "FLAT" / "H", "H", 4, start=10)     # real flats are named by time, so differ
+    rc, o = run(capsys, top, "--darks", darks)
+    assert o.count(" built MasterFlat_") == 1 and read_header(str(master(p2, "H")))["NCOMBINE"] == "4"
+    assert read_header(str(master(p1, "H")))["NCOMBINE"] == "5"
+
+
+def test_source_master_with_raw_deleted_is_still_copied(mosaic, capsys):
+    top, p1, p2, darks = mosaic
+    run(capsys, p1, "--darks", darks, "--delete-raw")
+    assert not master(p2, "H").exists()
+    rc, o = run(capsys, top, "--darks", darks)
+    assert "copied MasterFlat_" in o and master(p2, "H").read_bytes() == master(p1, "H").read_bytes()
+
+
+def test_copy_beside_a_master_at_another_angle_keeps_both(mosaic, capsys):
+    top, p1, p2, darks = mosaic
+    add_flats(p2 / NIGHT / "FLAT" / "H", "H", 3, ROTATANG="77.24")
+    rc, o = run(capsys, top, "--darks", darks)
+    d = master(p2, "H").parent
+    copy = d / f"MasterFlat_{NIGHT[6:]}_H_10s_2.xisf"
+    assert copy.read_bytes() == master(p1, "H").read_bytes()
+    assert read_header(str(master(p2, "H")))["ROTATANG"] == "77.24"
+    assert "copied" not in run(capsys, top, "--darks", darks)[1]
+
+
+def test_another_camera_is_not_a_source(mosaic, capsys):
+    top, p1, p2, darks = mosaic
+    p3 = top / "P 3"
+    add_lights(p3 / NIGHT / "LIGHT" / "H", "H", INSTRUME="'Other camera'")
+    rc, o = run(capsys, top, "--darks", darks)
+    assert o.count("copied MasterFlat_") == 1 and o.count("NO FLATS") == 1 and not (p3 / NIGHT / "FLAT").exists()
+
+
+def test_masters_not_built_are_not_sources(mosaic, tmp_path, capsys):
+    top, p1, p2, darks = mosaic
+    rc, o = run(capsys, top)                                           # no darks: nothing built, nothing to share
+    assert "NOT BUILT" in o and "copied" not in o and "NO FLATS" in o and not master(p2, "H").exists()

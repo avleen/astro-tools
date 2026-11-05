@@ -100,6 +100,29 @@ into it, in an image property (`MasterFlats:Inputs`). On the next run, a group i
 
 Masters made by other software (WBPP etc.) are never touched.
 
+## Targets with no flats of their own
+
+Scheduler flats can skip a filter and rotator angle they've already shot that
+morning, so mosaic panels often have lights but no flats. After building,
+masterflats looks at the lights it found. A `LIGHT` folder with no master for
+its filter and angle gets a copy of another target's master, in the matching
+`FLAT` folder:
+
+```
+D:\Astro\Downloads\Panel 2\NIGHT_2026-11-03\LIGHT\H\      lights only
+D:\Astro\Downloads\Panel 2\NIGHT_2026-11-03\FLAT\H\MasterFlat_2026-11-03_H_10s.xisf   copied from Panel 1
+```
+
+- A source must be from the same night, with the same filter, binning and
+  camera, and a rotator angle within 2°. With several, the one from the most
+  flats wins.
+- Pass all the targets, or a folder that holds them. Targets you don't pass
+  can't be sources.
+- Lights with nothing to copy are listed as `NO FLATS`, such as a sub taken at a
+  different angle from the rest of the night. They don't fail the run.
+- Own flats arriving later rebuild over the copy.
+- A copy isn't refreshed when its source is rebuilt. Delete it and run again.
+
 ## With subselect
 
 `subselect.py --copy` copies a night's master flat into

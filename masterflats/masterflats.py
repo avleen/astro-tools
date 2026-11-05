@@ -22,6 +22,12 @@ up to date is left alone (one from an older version has its pixels compressed an
 header fixed in place, not rebuilt); new flats or a new flat-dark rebuild it. Once raw flats are
 deleted (--delete-raw, or by hand) the master is kept. Safe to run every day.
 
+A target with lights but no flats for a filter and rotator angle gets a copy of another
+target's master from the same night (same filter, binning and camera, angle within 2 degrees),
+in FLAT next to its LIGHT folder. Scheduler flats can skip a repeated filter and angle, which
+leaves mosaic panels like this. Pass all the targets, or a folder holding them. Lights with no
+master to copy are listed as NO FLATS.
+
 subselect.py --copy picks the masters up automatically and copies them instead of
 the raw flats.
 
@@ -32,7 +38,7 @@ Examples:
 
 Requirements: Python 3.9+, numpy, zstandard (lz4 too, to read lz4-compressed flats).
 """
-import argparse, html, json, os, re, struct, sys, time
+import argparse, html, json, os, re, shutil, struct, sys, time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from xml.sax.saxutils import escape, quoteattr
@@ -45,6 +51,7 @@ from subselect import EXTS, _xisf_xml, expand, fix_argv, night_of, read_header, 
 VERSION = "1"
 KEEP_KEYS = ("INSTRUME", "TELESCOP", "FOCALLEN", "XPIXSZ", "YPIXSZ", "XBINNING", "YBINNING", "GAIN", "OFFSET",
              "EGAIN", "SET-TEMP", "CCD-TEMP", "ROTATANG", "OBJECT", "DATE-OBS", "DATE-LOC")
+ROT_TOLERANCE = 2.0  # degrees: covers a rotator re-centring mid-session; flats barely change over it
 
 
 def safe_name(s):
@@ -53,8 +60,8 @@ def safe_name(s):
 
 # ---------------------------------------------------------------- finding frames
 def scan(paths):
-    """Returns (raw flats, raw flat-darks) as dicts with path, file, hdr, night, filter, exp."""
-    flats, fdarks = [], []
+    """Returns (raw flats, raw flat-darks, lights, master flats) as dicts with path, file, hdr, night, filter, exp."""
+    flats, fdarks, lights, mflats = [], [], [], []
     for top in paths:
         if os.path.isfile(top):
             walk = [(os.path.dirname(top), [], [os.path.basename(top)])]
@@ -75,15 +82,18 @@ def scan(paths):
                     print(f"  skipping {p}: {e}", file=sys.stderr)
                     continue
                 t = h.get("IMAGETYP", "").upper()
-                if "MASTER" in t:
-                    continue
                 f = dict(path=p, file=fn, hdr=h, night=night_of(p, h), filter=h.get("FILTER", "") or "NOFILTER",
                          exp=float(h.get("EXPTIME", h.get("EXPOSURE", 0)) or 0))
-                if "DARK" in t:
+                if "MASTER" in t:
+                    if "FLAT" in t and "DARK" not in t:
+                        mflats.append(f)
+                elif "DARK" in t:
                     fdarks.append(f)
                 elif "FLAT" in t:
                     flats.append(f)
-    return flats, fdarks
+                elif "LIGHT" in t:
+                    lights.append(f)
+    return flats, fdarks, lights, mflats
 
 
 def load_masters(ddirs):
@@ -126,7 +136,7 @@ def groups(flats):
         if names[(d, name)] > 1:                     # two rotations/gains in one folder
             name += f"_{names[(d, name)]}"
         out.append(dict(night=night, filter=flt, exp=exp, gain=key[5], path=os.path.join(d, name + ".xisf"),
-                        files=g[key]))
+                        files=g[key], hdr=g[key][0]["hdr"]))
     return out
 
 
@@ -307,6 +317,81 @@ def write_master(path, img, hdr, grp, sig, dark_desc, kappa):
     _write_xisf(path, xml, data)
 
 
+# ---------------------------------------------------------------- sharing masters between targets
+def rot_of(h):
+    try:
+        return float(h.get("ROTATANG", h.get("ROTATOR", "")))
+    except ValueError:
+        return None
+
+
+def same_angle(a, b):
+    if a is None or b is None:
+        return a is b
+    return abs((a - b + 180) % 360 - 180) <= ROT_TOLERANCE
+
+
+def night_root(path, part):
+    """The folder holding <part> (LIGHT or FLAT) in this path, and what's below it; None if it isn't there."""
+    parts = os.path.dirname(os.path.abspath(path)).split(os.sep)
+    for i in range(len(parts) - 1, -1, -1):
+        if parts[i].upper() == part:
+            return os.sep.join(parts[:i]), os.sep.join(parts[i + 1:])
+    return None
+
+
+def short(root):
+    return os.path.join(os.path.basename(os.path.dirname(root)), os.path.basename(root))
+
+
+def share_masters(lights, ready, dry_run):
+    """Give lights with no master for their filter and angle a copy of another target's. ready: masters on disk
+    (or about to be, in a dry run), each with path, night, filter and hdr. Yields (status key, message)."""
+    def scope(x):                     # flats from another camera or binning don't apply
+        return x["night"], x["filter"], x["hdr"].get("XBINNING", "1"), x["hdr"].get("INSTRUME", "")
+    have, sources = defaultdict(list), defaultdict(list)
+    for m in ready:
+        where = night_root(m["path"], "FLAT")
+        if where:
+            have[(where[0],) + scope(m)].append(rot_of(m["hdr"]))
+        sources[scope(m)].append(m)
+    todo = defaultdict(list)
+    for f in lights:
+        where = night_root(f["path"], "LIGHT")
+        if where:
+            todo[(where[0], where[1], rot_of(f["hdr"])) + scope(f)].append(f)
+    taken = set()
+    for (root, sub, rot, *sc), group in sorted(todo.items(), key=lambda kv: (kv[0][0], str(kv[0][3:]), str(kv[0][2]))):
+        sc = tuple(sc)
+        if any(same_angle(rot, r) for r in have[(root,) + sc]):
+            continue
+        angle = "no angle" if rot is None else f"{rot:.1f} deg"
+        label = f"  {short(root)}  {sc[1]:>4} {angle}, {len(group)} lights"
+        options = [m for m in sources[sc] if same_angle(rot, rot_of(m["hdr"]))
+                   and (night_root(m["path"], "FLAT") or (None,))[0] != root]
+        if not options:
+            yield "without flats", f"{label}  NO FLATS: none at this angle from this night"
+            continue
+        src = min(options, key=lambda m: (-int(m["hdr"].get("NCOMBINE", len(m.get("files", ()))) or 0), m["path"]))
+        base, ext = os.path.splitext(os.path.basename(src["path"]))
+        d, n, name = os.path.join(root, "FLAT", sub), 1, base + ext
+        while os.path.exists(os.path.join(d, name)) or os.path.join(d, name) in taken:
+            n += 1
+            name = f"{base}_{n}{ext}"
+        dst = os.path.join(d, name)
+        taken.add(dst)
+        have[(root,) + sc].append(rot)
+        origin = short(night_root(src["path"], "FLAT")[0]) if night_root(src["path"], "FLAT") else os.path.dirname(src["path"])
+        if dry_run:
+            yield "to copy", f"{label}  would copy {name} from {origin}"
+            continue
+        os.makedirs(d, exist_ok=True)
+        tmp = f"{dst}.{os.getpid()}.tmp"
+        shutil.copy2(src["path"], tmp)
+        os.replace(tmp, dst)
+        yield "copied", f"{label}  copied {name} from {origin}"
+
+
 # ---------------------------------------------------------------- main
 def main(argv=None):
     for st in (sys.stdout, sys.stderr):              # cp1252 console / redirected file: never die on a character
@@ -329,11 +414,12 @@ def main(argv=None):
     if not a.paths:
         sys.exit("no input folders")
 
-    flats, fdarks = scan(a.paths)
+    flats, fdarks, lights, mflats = scan(a.paths)
     masters = load_masters(a.darks)
     print(f"{len(flats)} raw flats, {len(fdarks)} raw flat-darks, {len(masters)} master darks/biases")
     status = defaultdict(int)
     dark_cache = {}
+    ready = {m["path"]: m for m in mflats}
     for grp in groups(flats):
         label = f"  NIGHT_{grp['night']}  {grp['filter']:>4} {grp['exp']:g}s {len(grp['files']):3d} flats"
         name = os.path.basename(grp["path"])
@@ -358,6 +444,7 @@ def main(argv=None):
                 status["failed"] += 1
             print(f"{label}  up to date: {name}{note or ''}")
             status["up to date"] += 1
+            ready[grp["path"]] = grp
         elif len(grp["files"]) < a.min_flats:
             print(f"{label}  NOT BUILT: fewer than {a.min_flats} flats")
             status["not built"] += 1
@@ -365,6 +452,7 @@ def main(argv=None):
         elif a.dry_run:
             print(f"{label}  would build {name} (minus {dk[0]})")
             status["to build"] += 1
+            ready[grp["path"]] = grp
             continue
         else:
             t0 = time.time()
@@ -382,12 +470,16 @@ def main(argv=None):
                 continue
             print(f"{label}  built {name} (minus {dk[0]}, {time.time() - t0:.0f} s)")
             status["built"] += 1
+            ready[grp["path"]] = grp
         if a.delete_raw and not a.dry_run:
             done = set(recorded_inputs(grp["path"])["flats"])
             gone = [f for f in grp["files"] if f"{f['file']}|{os.path.getsize(f['path'])}" in done]
             for f in gone:
                 os.remove(f["path"])
             print(f"{' ' * len(label)}  deleted {len(gone)} raw flats (all are in the master)")
+    for key, message in share_masters(lights, list(ready.values()), a.dry_run):
+        print(message)
+        status[key] += 1
     print(", ".join(f"{n} {k}" for k, n in status.items()) or "nothing to do")
     return 1 if status["failed"] else 0
 
