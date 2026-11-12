@@ -203,7 +203,7 @@ def write_fits(path, img):
 
 
 def _hms(v, hours):
-    p = [float(x) for x in re.split(r"[ :hdms°'\"]+", v.strip()) if x not in ("", "+", "-")]
+    p = [abs(float(x)) for x in re.split(r"[ :hdms°'\"]+", v.strip()) if x not in ("", "+", "-")]
     val = p[0] + (p[1] if len(p) > 1 else 0) / 60 + (p[2] if len(p) > 2 else 0) / 3600
     val = -val if v.strip().startswith("-") else val
     return val * 15 if hours else val

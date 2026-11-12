@@ -9,6 +9,7 @@ own README and tests.
 | `subselect/` | `subselect.py` | grade light subs, copy keepers + that night's flats into `_selected/NIGHT_<date>/{LIGHT,FLAT}` |
 | `subdepth/` | `subdepth.py` | per-sub zero point (ASTAP + Gaia H18/H17), sky mag/arcsec², transparency, effective time |
 | `masterflats/` | `masterflats.py` | one master flat per night and filter, next to the raw flats; idempotent |
+| `framecheck/` | `framecheck.py` | plate-solve subs (ASTAP) and report offset and rotation from the header's target |
 | `flextest/` | `flextest.py`, `skybg.py` | flexure, tracking and sky-background diagnostics |
 | `pi-swap-recover/` | `pi_swap_recover.py` | recover images from PixInsight swap files |
 | `nina-sequences/` | `*.json` | N.I.N.A. Advanced Sequencer files (data, not code; no tests) |
@@ -24,7 +25,8 @@ own README and tests.
 - `masterflats` imports its file readers from `../subselect/subselect.py` via
   `sys.path`; keep shared readers there rather than copying them.
 - `subdepth` imports readers and the star finder from subselect the same way, and
-  calls ASTAP (`astap_cli`) as an external program.
+  calls ASTAP (`astap_cli`) as an external program. `framecheck` imports
+  subdepth's ASTAP helpers (`solve`, `solve_dir`, WCS functions) the same way.
 - Everything must work on native Windows as well as Linux/WSL: quote-safe
   paths, wildcard expansion done by the tools themselves (`expand`, `fix_argv`),
   no shell-only tricks.

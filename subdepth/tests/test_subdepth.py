@@ -351,3 +351,14 @@ def test_pedestal_option(tmp_path, monkeypatch):
     r = next(csv.DictReader(open(out, encoding="utf-8-sig")))
     assert r["sky_method"] == "pedestal" and float(r["sky_e"]) == pytest.approx(30.0, rel=0.05)
     assert float(r["gain_chk"]) == pytest.approx(0.25, rel=0.1)
+
+
+@pytest.mark.parametrize("v, hours, want", [
+    ("20 49 32", True, 15 * (20 + 49 / 60 + 32 / 3600)),
+    ("+29 23 25", False, 29 + 23 / 60 + 25 / 3600),
+    ("-61 18 28", False, -(61 + 18 / 60 + 28 / 3600)),
+    ("-0 30 00", False, -0.5),
+    ("- 5 30 00", False, -5.5),
+])
+def test_hms_signs(v, hours, want):
+    assert sd._hms(v, hours) == pytest.approx(want)

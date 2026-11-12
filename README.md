@@ -18,6 +18,7 @@ built to be chained together.
 |---|---|
 | [subselect](subselect) | Grades every light sub (FWHM, eccentricity, trailing, star count, background, gradient, optional sky e⁻ and read-noise efficiency). Copies the good and borderline ones, plus the same night's flats, into a layout that drops straight into PixInsight WBPP. |
 | [subdepth](subdepth) | Measures what each sub is worth on a faint target: plate-solves with ASTAP, gets a zero point from the Gaia star database, and reports sky brightness (mag/arcsec²), transparency and effective time, per sub, night and filter. |
+| [framecheck](framecheck) | Plate-solves each sub with ASTAP and reports how far it is from the target the sequence asked for (centre and rotation, from N.I.N.A.'s `OBJCTRA`/`OBJCTDEC`/`OBJCTROT`). Shows whether subs survived a failed centring, and checks mosaic panels before stacking. |
 | [flextest](flextest) | Diagnoses flexure and tracking: in-sub trails, drift and field rotation between subs, compensator on/off comparisons, sky background vs read noise. |
 | [masterflats](masterflats) | Turns each night's raw flats into one master flat per filter, next to the raw flats. Subtracts flat-darks, a master bias or a master dark. Writes zstd-compressed XISF that WBPP uses as-is. Copies a master to targets with lights but no flats for that filter and rotator angle, such as mosaic panels. Idempotent, so it can run every day; can delete the raw flats afterwards. |
 | [nina-sequences](nina-sequences) | N.I.N.A. Advanced Sequencer files: an unattended nightly sequence built on Target Scheduler, ending with the flats that masterflats uses. |
@@ -50,7 +51,7 @@ pip install -r requirements.txt
 
 `pillow` is only needed for `pi-swap-recover --previews`; install it with `pip install pillow`.
 
-subdepth also needs [ASTAP](https://www.hnsky.org/astap.htm) with its H18 or
+subdepth and framecheck also need [ASTAP](https://www.hnsky.org/astap.htm) with its H18 or
 H17 star database.
 
 ## Quick start
